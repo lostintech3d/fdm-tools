@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Rate Tool</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+
+        :root {
+            --bg-color: #070a13;
+            --card-bg: rgba(20, 26, 43, 0.6);
+            --card-border: rgba(255, 255, 255, 0.05);
+            --accent-blue: #3b82f6;
+            --accent-blue-glow: rgba(59, 130, 246, 0.5);
+            --warning-red: #ef4444;
+            --text-main: #ffffff;
+            --text-muted: #8a96aa;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: radial-gradient(circle at 50% 0%, #101c36 0%, transparent 50%);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 { font-weight: 900; font-size: 2rem; margin-bottom: 30px; text-transform: uppercase; letter-spacing: -1px; }
+        h1 span { color: var(--accent-blue); }
+
+        .controls-header { display: flex; gap: 10px; margin-bottom: 20px; }
+
+        .radio-label {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            transition: all 0.2s;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        input[type="radio"] { display: none; }
+        input[type="radio"]:checked + .radio-label {
+            background: var(--accent-blue);
+            color: white;
+            box-shadow: 0 0 15px var(--accent-blue-glow);
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 320px 1fr 320px;
+            gap: 20px;
+            width: 100%;
+            max-width: 1400px;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 24px;
+            backdrop-filter: blur(10px);
+        }
+
+        .input-group { margin-bottom: 20px; }
+        .input-label { 
+            font-size: 0.7rem; 
+            color: var(--text-muted); 
+            text-transform: uppercase; 
+            margin-bottom: 8px; 
+            display: block;
+            font-weight: 700;
+        }
+
+        .val-display {
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 6px;
+            display: flex;
+            align-items: baseline;
+            margin-bottom: 10px;
+        }
+
+        .val-display input {
+            background: transparent;
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 800;
+            width: 100%;
+            outline: none;
+        }
+
+        .unit { font-size: 0.8rem; color: var(--text-muted); margin-left: 5px; }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent-blue);
+            cursor: pointer;
+        }
+
+        .locked { opacity: 0.25; pointer-events: none; filter: grayscale(1); }
+
+        .results-list { list-style: none; padding: 0; margin: 0; }
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid var(--card-border);
+        }
+        .result-item:last-child { border: none; }
+        .res-label { font-size: 0.8rem; color: var(--text-muted); }
+        .res-val { font-weight: 800; font-size: 1.1rem; }
+        
+        .limit-input {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--card-border);
+            color: var(--accent-blue);
+            font-weight: 800;
+            font-size: 1.1rem;
+            width: 60px;
+            text-align: right;
+            border-radius: 4px;
+            padding: 2px 5px;
+        }
+
+        .warning { color: var(--warning-red); text-shadow: 0 0 10px rgba(239, 68, 68, 0.4); }
+        .chart-box { min-height: 450px; }
+
+        @media (max-width: 1100px) {
+            .main-grid { grid-template-columns: 1fr; }
+            .main-grid > div { order: 2; }
+            .main-grid .chart-box { order: 1; }
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Flow <span>/</span> Speed <span>/</span> Extrusion Calculator</h1>
+
+    <div class="controls-header">
+        <input type="radio" id="s-speed" name="solve" value="speed" checked>
+        <label for="s-speed" class="radio-label">Solve Speed</label>
+
+        <input type="radio" id="s-flow" name="solve" value="flow">
+        <label for="s-flow" class="radio-label">Solve Flow</label>
+
+        <input type="radio" id="s-height" name="solve" value="height">
+        <label for="s-height" class="radio-label">Solve Layer</label>
+    </div>
+
+    <div class="main-grid">
+        <div class="card">
+            <div class="input-group" id="ctrl-speed">
+                <span class="input-label">Print Speed</span>
+                <div class="val-display">
+                    <input type="number" id="n-speed" value="100">
+                    <span class="unit">mm/s</span>
+                </div>
+                <input type="range" id="r-speed" min="10" max="500" value="100">
+            </div>
+
+            <div class="input-group" id="ctrl-flow">
+                <span class="input-label">Flow Rate</span>
+                <div class="val-display">
+                    <input type="number" id="n-flow" value="8.00" step="0.1">
+                    <span class="unit">mm³/s</span>
+                </div>
+                <input type="range" id="r-flow" min="0.5" max="50" step="0.1" value="8.0">
+            </div>
+
+            <div class="input-group" id="ctrl-height">
+                <span class="input-label">Layer Height</span>
+                <div class="val-display">
+                    <input type="number" id="n-height" value="0.20" step="0.01">
+                    <span class="unit">mm</span>
+                </div>
+                <input type="range" id="r-height" min="0.05" max="1.0" step="0.01" value="0.20">
+            </div>
+
+            <div class="input-group" id="ctrl-width">
+                <span class="input-label">Line Width</span>
+                <div class="val-display">
+                    <input type="number" id="n-width" value="0.40" step="0.01">
+                    <span class="unit">mm</span>
+                </div>
+                <input type="range" id="r-width" min="0.1" max="2.0" step="0.01" value="0.40">
+            </div>
+        </div>
+
+        <div class="card chart-box">
+            <canvas id="mainChart"></canvas>
+        </div>
+
+        <div class="card">
+            <div class="input-label" style="margin-bottom: 20px;">System Results</div>
+            <ul class="results-list">
+                <li class="result-item">
+                    <span class="res-label">Flow Rate</span>
+                    <span class="res-val" id="res-flow">0.00 mm³/s</span>
+                </li>
+                <li class="result-item">
+                    <span class="res-label">Print Speed</span>
+                    <span class="res-val" id="res-speed">0.0 mm/s</span>
+                </li>
+                <li class="result-item">
+                    <span class="res-label">Layer Height</span>
+                    <span class="res-val" id="res-height">0.00 mm</span>
+                </li>
+                <li class="result-item">
+                    <span class="res-label">Extrusion Area</span>
+                    <span class="res-val" id="res-area">0.00 mm²</span>
+                </li>
+                <li class="result-item">
+                    <span class="res-label">Max Hotend Flow</span>
+                    <span>
+                        <input type="number" id="limit-val" class="limit-input" value="15">
+                        <span class="unit">mm³/s</span>
+                    </span>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let chart;
+        let lastDragged = 'height';
+        const state = { speed: 100, flow: 8, height: 0.2, width: 0.4, limit: 15 };
+        
+        const inputs = {
+            speed: { n: document.getElementById('n-speed'), r: document.getElementById('r-speed'), c: document.getElementById('ctrl-speed') },
+            flow: { n: document.getElementById('n-flow'), r: document.getElementById('r-flow'), c: document.getElementById('ctrl-flow') },
+            height: { n: document.getElementById('n-height'), r: document.getElementById('r-height'), c: document.getElementById('ctrl-height') },
+            width: { n: document.getElementById('n-width'), r: document.getElementById('r-width'), c: document.getElementById('ctrl-width') }
+        };
+
+        const units = { speed: 'mm/s', flow: 'mm³/s', height: 'mm', width: 'mm' };
+
+        function init() {
+            const ctx = document.getElementById('mainChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Result Curve',
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true,
+                        tension: 0.1,
+                        borderWidth: 2,
+                        data: []
+                    }, {
+                        label: 'Current Setup',
+                        pointRadius: 6,
+                        pointBackgroundColor: '#fff',
+                        borderColor: '#3b82f6',
+                        borderWidth: 3,
+                        data: [{x: 0, y: 0}]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'linear', title: { display: true, color: '#8a96aa' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                        y: { type: 'linear', title: { display: true, color: '#8a96aa' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+
+            document.querySelectorAll('input[name="solve"]').forEach(r => r.addEventListener('change', updateLogic));
+            document.getElementById('limit-val').addEventListener('input', (e) => { state.limit = parseFloat(e.target.value) || 0; calculate(); });
+
+            Object.keys(inputs).forEach(key => {
+                ['input', 'change'].forEach(evt => {
+                    inputs[key].r.addEventListener(evt, (e) => {
+                        lastDragged = key;
+                        inputs[key].n.value = e.target.value;
+                        calculate();
+                    });
+                });
+                inputs[key].n.addEventListener('input', (e) => {
+                    lastDragged = key;
+                    inputs[key].r.value = e.target.value;
+                    calculate();
+                });
+            });
+
+            updateLogic();
+        }
+
+        function updateLogic() {
+            const solveFor = document.querySelector('input[name="solve"]:checked').value;
+            Object.keys(inputs).forEach(key => {
+                if(inputs[key].c) inputs[key].c.classList.toggle('locked', key === solveFor);
+            });
+            // If the solved variable was the last dragged, switch axis to something else
+            if (lastDragged === solveFor) {
+                lastDragged = (solveFor === 'speed') ? 'height' : 'speed';
+            }
+            calculate();
+        }
+
+        function calculate() {
+            const solveFor = document.querySelector('input[name="solve"]:checked').value;
+            
+            if(solveFor !== 'speed') state.speed = parseFloat(inputs.speed.n.value) || 1;
+            if(solveFor !== 'flow') state.flow = parseFloat(inputs.flow.n.value) || 0.1;
+            if(solveFor !== 'height') state.height = parseFloat(inputs.height.n.value) || 0.01;
+            if(solveFor !== 'width') state.width = parseFloat(inputs.width.n.value) || 0.1;
+
+            const area = state.width * state.height;
+
+            if (solveFor === 'speed') {
+                state.speed = state.flow / area;
+                inputs.speed.n.value = state.speed.toFixed(1);
+                inputs.speed.r.value = state.speed;
+            } else if (solveFor === 'flow') {
+                state.flow = state.speed * area;
+                inputs.flow.n.value = state.flow.toFixed(2);
+                inputs.flow.r.value = state.flow;
+            } else if (solveFor === 'height') {
+                state.height = state.flow / (state.speed * state.width);
+                inputs.height.n.value = state.height.toFixed(3);
+                inputs.height.r.value = state.height;
+            }
+
+            updateUI(area, solveFor);
+        }
+
+        function updateUI(area, solveFor) {
+            document.getElementById('res-flow').innerText = `${state.flow.toFixed(2)} mm³/s`;
+            document.getElementById('res-speed').innerText = `${state.speed.toFixed(1)} mm/s`;
+            document.getElementById('res-height').innerText = `${state.height.toFixed(3)} mm`;
+            document.getElementById('res-area').innerText = `${area.toFixed(4)} mm²`;
+
+            if (state.flow > state.limit) document.getElementById('res-flow').classList.add('warning');
+            else document.getElementById('res-flow').classList.remove('warning');
+
+            const curve = [];
+            let currentX, currentY;
+
+            // X-Axis based strictly on last dragged
+            // Y-Axis based strictly on solveFor
+            chart.options.scales.x.title.text = `${lastDragged.charAt(0).toUpperCase() + lastDragged.slice(1)} (${units[lastDragged]})`;
+            chart.options.scales.y.title.text = `Result: ${solveFor.charAt(0).toUpperCase() + solveFor.slice(1)} (${units[solveFor]})`;
+
+            // Set Ranges for X-Axis
+            if (lastDragged === 'speed') chart.options.scales.x.max = 500;
+            else if (lastDragged === 'flow') chart.options.scales.x.max = 50;
+            else if (lastDragged === 'height') chart.options.scales.x.max = 1.0;
+            else if (lastDragged === 'width') chart.options.scales.x.max = 2.0;
+
+            const xMax = chart.options.scales.x.max;
+            const step = xMax / 50;
+
+            for (let i = 0; i <= xMax; i += step) {
+                let xVal = i;
+                if (xVal === 0) xVal = step / 10; // Avoid division by zero
+                let yVal = 0;
+
+                // Physics logic: Calculate the Solved variable (Y) based on moving input (X)
+                if (solveFor === 'flow') {
+                    if (lastDragged === 'speed') yVal = xVal * state.height * state.width;
+                    if (lastDragged === 'height') yVal = state.speed * xVal * state.width;
+                    if (lastDragged === 'width') yVal = state.speed * state.height * xVal;
+                } else if (solveFor === 'speed') {
+                    if (lastDragged === 'flow') yVal = xVal / (state.height * state.width);
+                    if (lastDragged === 'height') yVal = state.flow / (xVal * state.width);
+                    if (lastDragged === 'width') yVal = state.flow / (state.height * xVal);
+                } else if (solveFor === 'height') {
+                    if (lastDragged === 'flow') yVal = xVal / (state.speed * state.width);
+                    if (lastDragged === 'speed') yVal = state.flow / (xVal * state.width);
+                    if (lastDragged === 'width') yVal = state.flow / (state.speed * xVal);
+                }
+                curve.push({ x: xVal, y: yVal });
+            }
+
+            currentX = state[lastDragged];
+            currentY = state[solveFor];
+
+            chart.data.datasets[0].data = curve;
+            chart.data.datasets[1].data = [{ x: currentX, y: currentY }];
+            
+            // Auto-scale Y Axis
+            const yMaxNeeded = Math.max(currentY * 1.5, 10);
+            chart.options.scales.y.max = Math.ceil(yMaxNeeded / 10) * 10;
+            
+            chart.update('none');
+        }
+
+        init();
+    </script>
+</body>
+</html>
