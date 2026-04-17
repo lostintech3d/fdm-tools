@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Magnet Fit Calibrator</title>
+    <title>Magnet Fit Calibrator v2</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script type="importmap">
@@ -15,17 +15,17 @@
         }
     </script>
     <style>
-        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; display: flex; height: 100vh; overflow: hidden; background: #222; color: white; }
-        #sidebar { width: 320px; padding: 20px; background: #333; border-right: 1px solid #444; overflow-y: auto; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 10; }
-        #canvas-container { flex-grow: 1; position: relative; }
-        .control-group { margin-bottom: 15px; }
-        label { display: block; font-size: 0.9rem; margin-bottom: 5px; color: #ccc; }
-        input[type="range"] { width: 100%; cursor: pointer; }
+        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; background: #121212; color: #e0e0e0; }
+        #sidebar { width: 320px; padding: 25px; background: #1e1e1e; border-right: 1px solid #333; overflow-y: auto; z-index: 10; }
+        #canvas-container { flex-grow: 1; background: #000; position: relative; }
+        .control-group { margin-bottom: 20px; }
+        label { display: block; font-size: 0.85rem; margin-bottom: 8px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
+        input[type="range"] { width: 100%; accent-color: #007bff; }
         input[type="checkbox"] { margin-right: 10px; }
-        button { margin-top: 20px; width: 100%; padding: 12px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 1rem; }
+        button { margin-top: 10px; width: 100%; padding: 14px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 8px; font-weight: bold; transition: background 0.2s; }
         button:hover { background: #0056b3; }
-        .val { float: right; color: #007bff; font-weight: bold; }
-        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        .val { float: right; color: #007bff; }
+        h2 { margin: 0 0 20px 0; font-size: 1.4rem; font-weight: 300; }
     </style>
 </head>
 <body>
@@ -54,10 +54,10 @@
 
             useEffect(() => {
                 const scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x1a1a1a);
+                scene.background = new THREE.Color(0x121212);
                 
-                const camera = new THREE.PerspectiveCamera(45, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.1, 1000);
-                camera.position.set(0, -60, 50);
+                const camera = new THREE.PerspectiveCamera(40, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.1, 1000);
+                camera.position.set(0, -80, 60);
                 camera.up.set(0, 0, 1);
 
                 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -67,63 +67,60 @@
 
                 const controls = new OrbitControls(camera, renderer.domElement);
                 
-                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-                scene.add(ambientLight);
-                const spot = new THREE.PointLight(0xffffff, 1000);
-                spot.position.set(20, -40, 50);
-                scene.add(spot);
+                // LIGHTING FIX: Using Hemisphere + Directional for better 3D definition
+                scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2));
+                const light = new THREE.DirectionalLight(0xffffff, 2);
+                light.position.set(10, -20, 30);
+                scene.add(light);
 
-                // --- Geometry Building ---
-                const padding = 4;
+                // GEOMETRY
+                const padding = 5;
                 const blockWidth = params.magnetDiameter + padding;
                 const blockLength = params.numHoles * blockWidth;
-                const startX = -blockLength / 2 + blockWidth / 2;
+                const r = blockWidth / 2;
+                const L = (blockLength - blockWidth) / 2;
 
-                const shape = new THREE.Shape();
-                shape.moveTo(-blockLength/2, -blockWidth/2);
-                shape.lineTo(blockLength/2, -blockWidth/2);
-                shape.lineTo(blockLength/2, blockWidth/2);
-                shape.lineTo(-blockLength/2, blockWidth/2);
+                const createPillShape = () => {
+                    const s = new THREE.Shape();
+                    s.absarc(-L, 0, r, Math.PI / 2, -Math.PI / 2, false);
+                    s.absarc(L, 0, r, -Math.PI / 2, Math.PI / 2, false);
+                    return s;
+                };
+
+                const mainShape = createPillShape();
+                const startX = -L;
 
                 for (let i = 0; i < params.numHoles; i++) {
-                    const r = (params.magnetDiameter + (i - Math.floor(params.numHoles/2)) * params.stepSize) / 2;
+                    const holeR = (params.magnetDiameter + (i - Math.floor(params.numHoles/2)) * params.stepSize) / 2;
                     const cx = startX + (i * blockWidth);
                     const holePath = new THREE.Path();
                     
                     if (params.ribs) {
-                        const segments = 64;
-                        for (let j = 0; j <= segments; j++) {
-                            const angle = (j / segments) * Math.PI * 2;
-                            const modR = (j % 8 < 2) ? r - 0.2 : r;
+                        for (let j = 0; j <= 64; j++) {
+                            const angle = (j / 64) * Math.PI * 2;
+                            const modR = (j % 8 < 2) ? holeR - 0.2 : holeR;
                             const px = cx + Math.cos(angle) * modR;
                             const py = Math.sin(angle) * modR;
                             if (j === 0) holePath.moveTo(px, py); else holePath.lineTo(px, py);
                         }
                     } else {
-                        holePath.absarc(cx, 0, r, 0, Math.PI * 2, false);
+                        holePath.absarc(cx, 0, holeR, 0, Math.PI * 2, false);
                     }
-                    shape.holes.push(holePath);
+                    mainShape.holes.push(holePath);
                 }
 
-                const mainDepth = params.capped ? params.magnetDepth : params.partThickness;
-                const mainGeom = new THREE.ExtrudeGeometry(shape, { depth: mainDepth, bevelEnabled: false });
-                const material = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.3 });
+                const material = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.4, metalness: 0.2 });
+                const mainGeom = new THREE.ExtrudeGeometry(mainShape, { depth: params.capped ? params.magnetDepth : params.partThickness, bevelEnabled: false });
                 const mainMesh = new THREE.Mesh(mainGeom, material);
                 scene.add(mainMesh);
                 meshesRef.current = [mainMesh];
 
-                if (params.capped && params.partThickness > params.magnetDepth) {
-                    const baseShape = new THREE.Shape();
-                    baseShape.moveTo(-blockLength/2, -blockWidth/2);
-                    baseShape.lineTo(blockLength/2, -blockWidth/2);
-                    baseShape.lineTo(blockLength/2, blockWidth/2);
-                    baseShape.lineTo(-blockLength/2, blockWidth/2);
-
+                if (params.capped) {
+                    const baseShape = createPillShape();
                     if (params.vent) {
                         for (let i = 0; i < params.numHoles; i++) {
-                            const cx = startX + (i * blockWidth);
                             const vHole = new THREE.Path();
-                            vHole.absarc(cx, 0, 1, 0, Math.PI * 2, false);
+                            vHole.absarc(startX + (i * blockWidth), 0, 0.8, 0, Math.PI * 2, false);
                             baseShape.holes.push(vHole);
                         }
                     }
@@ -136,7 +133,6 @@
 
                 const animate = () => { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
                 animate();
-
                 return () => renderer.dispose();
             }, [params]);
 
@@ -159,7 +155,7 @@
                 const blob = new Blob([stl], { type: 'text/plain' });
                 const link = document.createElement('a');
                 link.href = URL.createObjectURL(blob);
-                link.download = 'magnet_test.stl';
+                link.download = `magnet_test_${params.magnetDiameter}mm.stl`;
                 link.click();
             };
 
@@ -171,17 +167,14 @@
                         ui('label', null, 'Magnet Dia', ui('span', { className: 'val' }, params.magnetDiameter + 'mm')),
                         ui('input', { type: 'range', min: 2, max: 20, step: 0.1, value: params.magnetDiameter, onChange: e => setParams({...params, magnetDiameter: parseFloat(e.target.value)}) })),
                     ui('div', { className: 'control-group' }, 
-                        ui('label', null, 'Magnet Depth', ui('span', { className: 'val' }, params.magnetDepth + 'mm')),
-                        ui('input', { type: 'range', min: 1, max: 10, step: 0.5, value: params.magnetDepth, onChange: e => setParams({...params, magnetDepth: parseFloat(e.target.value)}) })),
+                        ui('label', null, 'Step Size', ui('span', { className: 'val' }, params.stepSize + 'mm')),
+                        ui('input', { type: 'range', min: 0.01, max: 0.3, step: 0.01, value: params.stepSize, onChange: e => setParams({...params, stepSize: parseFloat(e.target.value)}) })),
                     ui('div', { className: 'control-group' }, 
                         ui('label', null, 'Part Thickness', ui('span', { className: 'val' }, params.partThickness + 'mm')),
-                        ui('input', { type: 'range', min: 2, max: 20, step: 0.5, value: params.partThickness, onChange: e => setParams({...params, partThickness: parseFloat(e.target.value)}) })),
-                    ui('div', { className: 'control-group' }, 
-                        ui('label', null, 'Step Size', ui('span', { className: 'val' }, params.stepSize + 'mm')),
-                        ui('input', { type: 'range', min: 0.01, max: 0.5, step: 0.01, value: params.stepSize, onChange: e => setParams({...params, stepSize: parseFloat(e.target.value)}) })),
+                        ui('input', { type: 'range', min: 2, max: 15, step: 0.5, value: params.partThickness, onChange: e => setParams({...params, partThickness: parseFloat(e.target.value)}) })),
                     ui('div', null, 
                         ui('label', null, ui('input', { type: 'checkbox', checked: params.capped, onChange: e => setParams({...params, capped: e.target.checked}) }), 'Capped Base'),
-                        ui('label', null, ui('input', { type: 'checkbox', checked: params.vent, disabled: !params.capped, onChange: e => setParams({...params, vent: e.target.checked}) }), 'Vent Holes (2mm)'),
+                        ui('label', null, ui('input', { type: 'checkbox', checked: params.vent, disabled: !params.capped, onChange: e => setParams({...params, vent: e.target.checked}) }), 'Vent Holes'),
                         ui('label', null, ui('input', { type: 'checkbox', checked: params.ribs, onChange: e => setParams({...params, ribs: e.target.checked}) }), 'Crush Ribs')),
                     ui('button', { onClick: exportSTL }, 'Download STL')
                 ),
