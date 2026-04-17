@@ -3,30 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Magnet Calibrator v3</title>
+    <title>Magnet Calibrator v8</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/examples/jsm/controls/OrbitControls": "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js",
-                "three/examples/jsm/loaders/FontLoader": "https://unpkg.com/three@0.160.0/examples/jsm/loaders/FontLoader.js",
-                "three/examples/jsm/geometries/TextGeometry": "https://unpkg.com/three@0.160.0/examples/jsm/geometries/TextGeometry.js"
+                "three": "https://esm.sh/three@0.160.0",
+                "three/addons/": "https://esm.sh/three@0.160.0/examples/jsm/"
             }
         }
     </script>
     <style>
-        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; background: #121212; color: #eee; }
-        #sidebar { width: 320px; padding: 20px; background: #1e1e1e; border-right: 1px solid #333; overflow-y: auto; }
-        #canvas-container { flex-grow: 1; background: #000; }
+        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; background: #121212; color: #eee; overflow: hidden; }
+        #sidebar { width: 340px; padding: 20px; background: #1e1e1e; border-right: 1px solid #333; overflow-y: auto; flex-shrink: 0; }
+        #canvas-container { flex-grow: 1; background: #000; position: relative; }
         .control-group { margin-bottom: 15px; }
-        label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: #888; text-transform: uppercase; }
-        input[type="range"] { width: 100%; accent-color: #007bff; }
+        .label-row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+        label { font-size: 0.7rem; color: #888; text-transform: uppercase; }
+        .input-wrap { display: flex; gap: 8px; align-items: center; }
+        input[type="range"] { flex-grow: 1; accent-color: #007bff; }
+        input[type="number"] { width: 60px; background: #2a2a2a; border: 1px solid #444; color: #007bff; padding: 3px; border-radius: 4px; font-size: 0.8rem; text-align: center; }
         button { margin-top: 15px; width: 100%; padding: 12px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 6px; font-weight: bold; }
-        .val { float: right; color: #007bff; }
-        .check-row { display: flex; align-items: center; margin-bottom: 8px; font-size: 0.9rem; }
+        .check-row { display: flex; align-items: center; margin-bottom: 8px; font-size: 0.85rem; cursor: pointer; }
         input[type="checkbox"] { margin-right: 10px; }
+        
+        #labels-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; }
+        .hole-label { position: absolute; color: #007bff; font-weight: bold; font-size: 11px; transform: translate(-50%, -100%); text-shadow: 1px 1px 2px black; background: rgba(0,0,0,0.4); padding: 2px 4px; border-radius: 3px; }
     </style>
 </head>
 <body>
@@ -34,38 +37,35 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-        import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
-        import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
         const { useState, useEffect, useRef } = React;
 
         const App = () => {
             const containerRef = useRef(null);
+            const labelContainerRef = useRef(null);
             const [params, setParams] = useState({
-                magnetDiameter: 6,
+                magnetDiameter: 6.0,
                 magnetDepth: 2.5,
-                partThickness: 5,
+                partThickness: 5.0,
                 numHoles: 5,
                 stepSize: 0.1,
                 capped: true,
                 vent: true,
-                ribs: false,
-                engraveLabels: true
+                ribs: true
             });
             
-            const meshesRef = useRef([]);
+            const state = useRef({ scene: null, camera: null, renderer: null, controls: null, meshes: [], holes: [] });
 
             useEffect(() => {
                 const scene = new THREE.Scene();
                 scene.background = new THREE.Color(0x121212);
                 const camera = new THREE.PerspectiveCamera(40, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.1, 1000);
-                camera.position.set(0, -100, 70);
+                camera.position.set(0, -120, 90);
                 camera.up.set(0, 0, 1);
 
                 const renderer = new THREE.WebGLRenderer({ antialias: true });
                 renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-                containerRef.current.innerHTML = '';
                 containerRef.current.appendChild(renderer.domElement);
 
                 const controls = new OrbitControls(camera, renderer.domElement);
@@ -74,136 +74,146 @@
                 sun.position.set(10, -30, 50);
                 scene.add(sun);
 
-                // --- Geometry Building ---
+                state.current = { scene, camera, renderer, controls, meshes: [], holes: [] };
+
+                const animate = () => {
+                    state.current.anim = requestAnimationFrame(animate);
+                    controls.update();
+                    
+                    if (labelContainerRef.current) {
+                        const labels = labelContainerRef.current.children;
+                        state.current.holes.forEach((h, i) => {
+                            const v = new THREE.Vector3(h.x, 0, params.capped ? params.magnetDepth : params.partThickness);
+                            v.project(camera);
+                            if (labels[i]) {
+                                labels[i].style.left = `${(v.x * 0.5 + 0.5) * containerRef.current.clientWidth}px`;
+                                labels[i].style.top = `${(v.y * -0.5 + 0.5) * containerRef.current.clientHeight - 10}px`;
+                                labels[i].style.opacity = v.z > 1 ? 0 : 1;
+                            }
+                        });
+                    }
+                    renderer.render(scene, camera);
+                };
+                animate();
+
+                return () => {
+                    cancelAnimationFrame(state.current.anim);
+                    renderer.dispose();
+                };
+            }, []);
+
+            useEffect(() => {
+                const { scene, meshes } = state.current;
+                if (!scene) return;
+                meshes.forEach(m => scene.remove(m));
+                state.current.meshes = [];
+                state.current.holes = [];
+
                 const padding = 6;
                 const blockWidth = params.magnetDiameter + padding;
-                const blockLength = params.numHoles * blockWidth;
-                const r = blockWidth / 2;
-                const L = (blockLength - blockWidth) / 2;
+                const L = ((params.numHoles * blockWidth) - blockWidth) / 2;
+                const startX = -L;
 
                 const createPill = () => {
                     const s = new THREE.Shape();
-                    s.absarc(-L, 0, r, Math.PI / 2, -Math.PI / 2, false);
-                    s.absarc(L, 0, r, -Math.PI / 2, Math.PI / 2, false);
+                    s.absarc(-L, 0, blockWidth/2, Math.PI/2, -Math.PI/2, false);
+                    s.absarc(L, 0, blockWidth/2, -Math.PI/2, Math.PI/2, false);
                     return s;
                 };
 
                 const mainShape = createPill();
-                const startX = -L;
-                const material = new THREE.MeshStandardMaterial({ color: 0x777777, roughness: 0.4 });
-
-                // Holes logic
                 for (let i = 0; i < params.numHoles; i++) {
                     const offset = (i - Math.floor(params.numHoles/2)) * params.stepSize;
                     const holeR = (params.magnetDiameter + offset) / 2;
                     const cx = startX + (i * blockWidth);
-                    
-                    const holePath = new THREE.Path();
+                    state.current.holes.push({ x: cx, absSize: (params.magnetDiameter + offset).toFixed(2) });
+
+                    const hPath = new THREE.Path();
                     if (params.ribs) {
-                        for (let j = 0; j <= 64; j++) {
-                            const angle = (j / 64) * Math.PI * 2;
-                            const modR = (j % 8 < 2) ? holeR - 0.25 : holeR;
-                            holePath.lineTo(cx + Math.cos(angle) * modR, Math.sin(angle) * modR);
+                        const rd = 0.35; // Rib intrusion depth
+                        const rw = 0.15; // Angular width of rib in radians
+                        // Create a continuous path for the circle + square notches
+                        for (let step = 0; step <= 360; step++) {
+                            const ang = (step * Math.PI) / 180;
+                            let r = holeR;
+                            // Add square notches at cardinal points
+                            const isRib = [0, Math.PI/2, Math.PI, 3*Math.PI/2].some(base => Math.abs(ang - base) < rw);
+                            if (isRib) r -= rd;
+                            
+                            if (step === 0) hPath.moveTo(cx + Math.cos(ang) * r, Math.sin(ang) * r);
+                            else hPath.lineTo(cx + Math.cos(ang) * r, Math.sin(ang) * r);
                         }
                     } else {
-                        holePath.absarc(cx, 0, holeR, 0, Math.PI * 2, false);
+                        hPath.absarc(cx, 0, holeR, 0, Math.PI * 2, false);
                     }
-                    mainShape.holes.push(holePath);
+                    mainShape.holes.push(hPath);
                 }
 
-                // Main body
-                const bodyDepth = params.capped ? params.magnetDepth : params.partThickness;
-                const mainGeom = new THREE.ExtrudeGeometry(mainShape, { depth: bodyDepth, bevelEnabled: false });
-                const mainMesh = new THREE.Mesh(mainGeom, material);
-                scene.add(mainMesh);
-                meshesRef.current = [mainMesh];
+                const bodyD = params.capped ? params.magnetDepth : params.partThickness;
+                const geo = new THREE.ExtrudeGeometry(mainShape, { depth: bodyD, bevelEnabled: false });
+                const m1 = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x666666, roughness: 0.5 }));
+                scene.add(m1);
+                state.current.meshes.push(m1);
 
-                // Capped base
-                if (params.capped && params.partThickness > params.magnetDepth) {
+                if (params.capped) {
                     const baseS = createPill();
                     if (params.vent) {
                         for (let i = 0; i < params.numHoles; i++) {
                             const v = new THREE.Path();
-                            v.absarc(startX + (i * blockWidth), 0, 0.8, 0, Math.PI * 2, false);
+                            v.absarc(startX + (i * blockWidth), 0, 0.9, 0, Math.PI * 2, false);
                             baseS.holes.push(v);
                         }
                     }
-                    const baseGeom = new THREE.ExtrudeGeometry(baseS, { depth: params.partThickness - params.magnetDepth, bevelEnabled: false });
-                    baseGeom.translate(0, 0, -(params.partThickness - params.magnetDepth));
-                    const baseMesh = new THREE.Mesh(baseGeom, material);
-                    scene.add(baseMesh);
-                    meshesRef.current.push(baseMesh);
+                    const m2 = new THREE.Mesh(new THREE.ExtrudeGeometry(baseS, { depth: params.partThickness - params.magnetDepth, bevelEnabled: false }), m1.material);
+                    m2.position.z = -(params.partThickness - params.magnetDepth);
+                    scene.add(m2);
+                    state.current.meshes.push(m2);
                 }
-
-                // Add physical text labels (Simple implementation for STL export)
-                // Note: Real 3D text in STL requires a font JSON. We use a proxy group for the render.
-                const loader = new FontLoader();
-                loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
-                    for (let i = 0; i < params.numHoles; i++) {
-                        const offset = (i - Math.floor(params.numHoles/2)) * params.stepSize;
-                        const labelStr = (offset >= 0 ? "+" : "") + offset.toFixed(2);
-                        const textGeo = new TextGeometry(labelStr, { font: font, size: 2, height: 0.5 });
-                        textGeo.center();
-                        const cx = startX + (i * blockWidth);
-                        const tMesh = new THREE.Mesh(textGeo, new THREE.MeshStandardMaterial({color: 0x007bff}));
-                        tMesh.position.set(cx, blockWidth/2 - 2, bodyDepth);
-                        scene.add(tMesh);
-                        if (params.engraveLabels) meshesRef.current.push(tMesh);
-                    }
-                });
-
-                const animate = () => { requestAnimationFrame(animate); controls.update(); renderer.render(scene, camera); };
-                animate();
-                return () => renderer.dispose();
             }, [params]);
 
             const exportSTL = () => {
                 let stl = 'solid magnet_test\n';
-                meshesRef.current.forEach(m => {
-                    const geo = m.geometry.toNonIndexed();
-                    const pos = geo.attributes.position;
+                state.current.meshes.forEach(m => {
+                    const pos = m.geometry.toNonIndexed().attributes.position;
                     m.updateMatrixWorld();
                     for (let i = 0; i < pos.count; i += 3) {
                         const v1 = new THREE.Vector3(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(m.matrixWorld);
                         const v2 = new THREE.Vector3(pos.getX(i+1), pos.getY(i+1), pos.getZ(i+1)).applyMatrix4(m.matrixWorld);
                         const v3 = new THREE.Vector3(pos.getX(i+2), pos.getY(i+2), pos.getZ(i+2)).applyMatrix4(m.matrixWorld);
-                        const normal = new THREE.Vector3().crossVectors(v2.clone().sub(v1), v3.clone().sub(v1)).normalize();
-                        stl += `facet normal ${normal.x} ${normal.y} ${normal.z}\n  outer loop\n`;
-                        stl += `    vertex ${v1.x} ${v1.y} ${v1.z}\n    vertex ${v2.x} ${v2.y} ${v2.z}\n    vertex ${v3.x} ${v3.y} ${v3.z}\n`;
-                        stl += `  endloop\nendfacet\n`;
+                        const n = new THREE.Vector3().crossVectors(v2.clone().sub(v1), v3.clone().sub(v1)).normalize();
+                        stl += `facet normal ${n.x} ${n.y} ${n.z}\n  outer loop\n    vertex ${v1.x} ${v1.y} ${v1.z}\n    vertex ${v2.x} ${v2.y} ${v2.z}\n    vertex ${v3.x} ${v3.y} ${v3.z}\n  endloop\nendfacet\n`;
                     }
                 });
                 stl += 'endsolid magnet_test';
-                const blob = new Blob([stl], { type: 'text/plain' });
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(blob);
-                a.download = `magnet_calibrator_${params.magnetDiameter}mm.stl`;
-                a.click();
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(new Blob([stl], { type: 'text/plain' }));
+                link.download = `calibrator_${params.magnetDiameter}mm.stl`;
+                link.click();
             };
 
             const ui = React.createElement;
+            const Row = ({label, id, min, max, step}) => ui('div', { className: 'control-group' },
+                ui('div', { className: 'label-row' }, ui('label', null, label), ui('input', { type: 'number', step, value: params[id], onChange: e => setParams({...params, [id]: parseFloat(e.target.value) || 0}) })),
+                ui('div', { className: 'input-wrap' }, ui('input', { type: 'range', min, max, step, value: params[id], onChange: e => setParams({...params, [id]: parseFloat(e.target.value) || 0}) }))
+            );
+
             return ui('div', { style: { display: 'flex', width: '100vw' } },
                 ui('div', { id: 'sidebar' },
-                    ui('h2', null, 'Vibe Calibrator'),
-                    ui('div', { className: 'control-group' }, 
-                        ui('label', null, 'Magnet Dia', ui('span', { className: 'val' }, params.magnetDiameter + 'mm')),
-                        ui('input', { type: 'range', min: 2, max: 20, step: 0.1, value: params.magnetDiameter, onChange: e => setParams({...params, magnetDiameter: parseFloat(e.target.value)}) })),
-                    ui('div', { className: 'control-group' }, 
-                        ui('label', null, 'Magnet Depth', ui('span', { className: 'val' }, params.magnetDepth + 'mm')),
-                        ui('input', { type: 'range', min: 1, max: 10, step: 0.1, value: params.magnetDepth, onChange: e => setParams({...params, magnetDepth: parseFloat(e.target.value)}) })),
-                    ui('div', { className: 'control-group' }, 
-                        ui('label', null, 'Total Thickness', ui('span', { className: 'val' }, params.partThickness + 'mm')),
-                        ui('input', { type: 'range', min: 2, max: 15, step: 0.5, value: params.partThickness, onChange: e => setParams({...params, partThickness: parseFloat(e.target.value)}) })),
-                    ui('div', { className: 'control-group' }, 
-                        ui('label', null, 'Step Size', ui('span', { className: 'val' }, params.stepSize + 'mm')),
-                        ui('input', { type: 'range', min: 0.01, max: 0.25, step: 0.01, value: params.stepSize, onChange: e => setParams({...params, stepSize: parseFloat(e.target.value)}) })),
-                    ui('div', { className: 'check-row' }, ui('input', { type: 'checkbox', checked: params.capped, onChange: e => setParams({...params, capped: e.target.checked}) }), 'Capped Base'),
-                    ui('div', { className: 'check-row' }, ui('input', { type: 'checkbox', checked: params.vent, disabled: !params.capped, onChange: e => setParams({...params, vent: e.target.checked}) }), 'Vent Holes'),
-                    ui('div', { className: 'check-row' }, ui('input', { type: 'checkbox', checked: params.ribs, onChange: e => setParams({...params, ribs: e.target.checked}) }), 'Crush Ribs'),
-                    ui('div', { className: 'check-row' }, ui('input', { type: 'checkbox', checked: params.engraveLabels, onChange: e => setParams({...params, engraveLabels: e.target.checked}) }), 'Print Labels on Part'),
+                    ui('h2', { style: { fontWeight: 300, fontSize: '1.4rem' } }, 'Magnet Calibrator'),
+                    Row({ label: 'Base Magnet Diameter', id: 'magnetDiameter', min: 2, max: 20, step: 0.1 }),
+                    Row({ label: 'Magnet Depth', id: 'magnetDepth', min: 1, max: 10, step: 0.1 }),
+                    Row({ label: 'Total Thickness', id: 'partThickness', min: 2, max: 20, step: 0.5 }),
+                    Row({ label: 'Step Size (Offset)', id: 'stepSize', min: 0.01, max: 0.5, step: 0.01 }),
+                    ui('div', { className: 'check-row', onClick: () => setParams({...params, capped: !params.capped}) }, ui('input', { type: 'checkbox', checked: params.capped, readOnly: true }), 'Capped Base'),
+                    ui('div', { className: 'check-row', onClick: () => setParams({...params, vent: !params.vent}) }, ui('input', { type: 'checkbox', checked: params.vent, readOnly: true, disabled: !params.capped }), 'Vent Holes'),
+                    ui('div', { className: 'check-row', onClick: () => setParams({...params, ribs: !params.ribs}) }, ui('input', { type: 'checkbox', checked: params.ribs, readOnly: true }), 'Square Crush Ribs'),
                     ui('button', { onClick: exportSTL }, 'Download STL')
                 ),
-                ui('div', { ref: containerRef, id: 'canvas-container' })
+                ui('div', { ref: containerRef, id: 'canvas-container' },
+                    ui('div', { id: 'labels-overlay', ref: labelContainerRef }, 
+                        state.current.holes.map((h, i) => ui('div', { key: i, className: 'hole-label' }, `${h.absSize}mm`))
+                    )
+                )
             );
         };
 
