@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Magnet Calibrator v8</title>
+    <title>Magnet Calibrator v9</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script type="importmap">
@@ -102,9 +102,11 @@
                 };
             }, []);
 
+            // Handle geometry updates
             useEffect(() => {
                 const { scene, meshes } = state.current;
                 if (!scene) return;
+                
                 meshes.forEach(m => scene.remove(m));
                 state.current.meshes = [];
                 state.current.holes = [];
@@ -126,17 +128,17 @@
                     const offset = (i - Math.floor(params.numHoles/2)) * params.stepSize;
                     const holeR = (params.magnetDiameter + offset) / 2;
                     const cx = startX + (i * blockWidth);
-                    state.current.holes.push({ x: cx, absSize: (params.magnetDiameter + offset).toFixed(2) });
+                    
+                    // Store positions for the 3D loop to map to 2D space
+                    state.current.holes.push({ x: cx });
 
                     const hPath = new THREE.Path();
                     if (params.ribs) {
                         const rd = 0.35; // Rib intrusion depth
                         const rw = 0.15; // Angular width of rib in radians
-                        // Create a continuous path for the circle + square notches
                         for (let step = 0; step <= 360; step++) {
                             const ang = (step * Math.PI) / 180;
                             let r = holeR;
-                            // Add square notches at cardinal points
                             const isRib = [0, Math.PI/2, Math.PI, 3*Math.PI/2].some(base => Math.abs(ang - base) < rw);
                             if (isRib) r -= rd;
                             
@@ -211,7 +213,12 @@
                 ),
                 ui('div', { ref: containerRef, id: 'canvas-container' },
                     ui('div', { id: 'labels-overlay', ref: labelContainerRef }, 
-                        state.current.holes.map((h, i) => ui('div', { key: i, className: 'hole-label' }, `${h.absSize}mm`))
+                        // Fix: Generate DOM elements directly from state variables instead of a ref
+                        Array.from({length: params.numHoles}).map((_, i) => {
+                            const offset = (i - Math.floor(params.numHoles/2)) * params.stepSize;
+                            const absSize = (params.magnetDiameter + offset).toFixed(2);
+                            return ui('div', { key: i, className: 'hole-label' }, `${absSize}mm`);
+                        })
                     )
                 )
             );
