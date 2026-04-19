@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>In-Browser Magnet Hole Cutter</title>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "three-mesh-bvh": "https://unpkg.com/three-mesh-bvh@0.7.0/build/index.module.js",
+                "three-bvh-csg": "https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js"
+            }
+        }
+    </script>
+    <style>
+        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; background: #121212; color: #eee; overflow: hidden; }
+        #sidebar { width: 320px; padding: 20px; background: #1e1e1e; border-right: 1px solid #333; display: flex; flex-direction: column; gap: 15px; z-index: 10; }
+        #canvas-container { flex-grow: 1; background: #222; position: relative; cursor: crosshair; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 0.8rem; color: #888; text-transform: uppercase; }
+        input[type="number"] { background: #2a2a2a; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; }
+        input[type="file"] { font-size: 0.85rem; color: #ccc; }
+        input[type="file"]::file-selector-button { background: #444; color: #fff; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+        button { padding: 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 6px; font-weight: bold; }
+        button:disabled { background: #444; color: #888; cursor: not-allowed; }
+        #loading { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); padding: 5px 10px; border-radius: 4px; display: none; font-size: 0.9rem; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h2>Magnet Cutter</h2>
+        <div class="control-group">
+            <label>Upload STL Model</label>
+            <input type="file" id="fileInput" accept=".stl">
+        </div>
+        <div class="control-group">
+            <label>Magnet Diameter (mm)</label>
+            <input type="number" id="magDiam" value="6.0" step="0.1" min="1">
+        </div>
+        <div class="control-group">
+            <label>Magnet Depth (mm)</label>
+            <input type="number" id="magDepth" value="2.5" step="0.1" min="0.5">
+        </div>
+        <button id="exportBtn" disabled>Download Modified STL</button>
+        <div style="font-size: 0.8rem; color: #777; margin-top: auto;">
+            <strong>Instructions:</strong><br>
+            1. Upload an STL.<br>
+            2. Left-click on the model to subtract a hole.<br>
+            3. The hole is aligned to the surface normal.
+        </div>
+    </div>
+    
+    <div id="canvas-container">
+        <div id="loading">Processing CSG...</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+        import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+        import { Evaluator, SUBTRACTION, Brush } from 'three-bvh-csg';
+
+        // Setup BVH
+        THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+        THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+        THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 2000);
+        camera.position.set(100, 100, 100);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setClearColor(0x222222);
+        container.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.position.set(100, 200, 100);
+        scene.add(dirLight);
+
+        let targetBrush = null;
+        const csgEvaluator = new Evaluator();
+        csgEvaluator.useGroups = false;
+        
+        const loader = new STLLoader();
+        const exporter = new STLExporter();
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        const fileInput = document.getElementById('fileInput');
+        const exportBtn = document.getElementById('exportBtn');
+        const loadingUI = document.getElementById('loading');
+
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                let geometry = loader.parse(e.target.result);
+                
+                // 1. Convert "triangle soup" to indexed geometry
+                geometry = BufferGeometryUtils.mergeVertices(geometry);
+                
+                // 2. Ensure UVs exist (Mandatory for this CSG library)
+                if (!geometry.attributes.uv) {
+                    const pos = geometry.attributes.position;
+                    const uvs = new Float32Array(pos.count * 2);
+                    geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+                }
+
+                geometry.center();
+                geometry.computeVertexNormals();
+                geometry.computeBoundsTree();
+
+                if (targetBrush) scene.remove(targetBrush);
+
+                const material = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.4 });
+                targetBrush = new Brush(geometry, material);
+                scene.add(targetBrush);
+                
+                // Reset camera to see the model
+                const box = new THREE.Box3().setFromObject(targetBrush);
+                const size = box.getSize(new THREE.Vector3()).length();
+                camera.position.set(size, size, size);
+                controls.target.copy(box.getCenter(new THREE.Vector3()));
+                controls.update();
+
+                exportBtn.disabled = false;
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        container.addEventListener('mousedown', (event) => {
+            if (!targetBrush || event.button !== 0) return;
+
+            const rect = container.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / container.clientWidth) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / container.clientHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(targetBrush);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                performCut(hit.point, hit.face.normal);
+            }
+        });
+
+        function performCut(point, normal) {
+            loadingUI.style.display = 'block';
+            
+            // Timeout to allow UI "Processing" text to render
+            setTimeout(() => {
+                const diameter = parseFloat(document.getElementById('magDiam').value);
+                const depth = parseFloat(document.getElementById('magDepth').value);
+                const r = diameter / 2;
+
+                const toolGeo = new THREE.CylinderGeometry(r, r, depth, 32);
+                // Shift cylinder so top is at origin
+                toolGeo.translate(0, -depth / 2, 0); 
+                
+                const toolBrush = new Brush(toolGeo, new THREE.MeshStandardMaterial());
+                toolBrush.position.copy(point);
+                
+                // Align Y-axis of cylinder to surface normal
+                toolBrush.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+                
+                targetBrush.updateMatrixWorld();
+                toolBrush.updateMatrixWorld();
+
+                try {
+                    const result = csgEvaluator.evaluate(targetBrush, toolBrush, SUBTRACTION);
+                    
+                    // Update targetBrush with new geometry
+                    targetBrush.geometry.dispose();
+                    targetBrush.geometry = result.geometry;
+                    targetBrush.geometry.computeBoundsTree(); // Update spatial index for next click
+                } catch (err) {
+                    console.error(err);
+                    alert("Error during CSG operation. Check console.");
+                }
+
+                loadingUI.style.display = 'none';
+            }, 50);
+        }
+
+        exportBtn.addEventListener('click', () => {
+            if (!targetBrush) return;
+            const result = exporter.parse(targetBrush);
+            const blob = new Blob([result], { type: 'application/octet-stream' });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'modified_model.stl';
+            link.click();
+        });
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+    </script>
+</body>
+</html>
